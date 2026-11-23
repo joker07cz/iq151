@@ -16,6 +16,8 @@ export class IQ151 {
     this.monitor = null;
     this.module = null;
     this.ioLog = [];
+    this.soundLog = [];
+    this._lastSoundBit = 0;
     this.resetOverlay=true; this.port80=0; this.video64DoubleWidthEnabled=false; this.ppi=[0xff,0xff,0xff,0x9b]; this.pic=new I8259(); this.keyboard=new IQKeyboard();
     this.bus = {
       memRead: addr => this.memRead(addr),
@@ -25,7 +27,8 @@ export class IQ151 {
     };
     this.cpu = new Intel8080(this.bus);
     this.cpu.interruptController=this.pic;
-    this.clockHz=2000000; this.irqPeriodMs=20; this.irqCount=0; this.lastWallMs=null; this.tstateRemainder=0;
+    // 18,432 MHz / 9 = 2,048 MHz (skutečný IQ 151; 50 Hz přerušení = 40 960 taktů). Zvuk bere kmitočet odsud.
+    this.clockHz=2048000; this.irqPeriodMs=20; this.irqCount=0; this.lastWallMs=null; this.tstateRemainder=0;
     this.reset();
   }
   loadMonitor(image) {
@@ -45,6 +48,8 @@ export class IQ151 {
     this.ram.fill(0); this.vram.fill(0); if(this.grafik) this.grafik.reset(); this.cpu.reset();
     this.ram[0xc800] = 0xff; // Obchází chybu monitoru při konfiguraci 64 kB RAM bez BASICu (na C800 hledá modul).
     this.ioLog=[];
+    this.soundLog=[];
+    this._lastSoundBit=0;
     this.resetOverlay=true; this.port80=0; this.video64DoubleWidthEnabled=false; this.ppi=[0xff,0xff,0xff,0x9b]; this.pic.reset(); this.keyboard=new IQKeyboard();
     this.lastWallMs=null;this.tstateRemainder=0;this.irqCount=0;this.irqTstates=0;
   }
@@ -121,7 +126,16 @@ export class IQ151 {
     port &= 0xff; value &= 0xff;
     if(this.ioLog.length < 2048) this.ioLog.push({port,value});
     if(port===0x80) { this.port80=value; if(value&1) this.resetOverlay=false; }
-    else if(port>=0x84 && port<=0x87) this.ppiWrite(port-0x84,value);
+    else if(port>=0x84 && port<=0x87) {
+      this.ppiWrite(port-0x84,value);
+      // reproduktor: PC3 portu C; zaznamenat každé přepnutí s časem v taktech CPU
+      const bit = (this.ppi[2] >> 3) & 1;
+      if (bit !== this._lastSoundBit) {
+        this._lastSoundBit = bit;
+        this.soundLog.push({ cycle: this.cpu.cycles, bit });
+        if (this.soundLog.length > 65536) this.soundLog.shift();
+      }
+    }
     else if(port===0x88 || port===0x89) this.pic.write(port-0x88,value);
     else if(port>=0xd0 && port<=0xd4 && this.grafik) this.grafik.write(port,value);
     else if(port>=0xfc && this.video==='VIDEO64') this.video64DoubleWidthEnabled=!!(value&1);
@@ -145,6 +159,7 @@ export class IQ151 {
     }
     return executed;
   }
+  drainSound() { const l = this.soundLog; this.soundLog = []; return l; }
   runInstructions(count=1) {
     let tstates=0;
     for(let i=0;i<count;i++) tstates+=this.cpu.step();
