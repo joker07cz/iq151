@@ -1,0 +1,60 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { IQ151 } from '../src/iq151.js';
+import { parseIntelHex, installIntelHex } from '../src/intel_hex.js';
+
+const fixture = fs.readFileSync(new URL('../programs/invaders.hex', import.meta.url), 'utf8');
+const parsed = parseIntelHex(fixture);
+assert.equal(parsed.size, 11408);
+assert.equal(parsed.records, 358);
+assert.equal(parsed.entry, 0x100);
+assert.equal(parsed.explicitEntry, false);
+assert.deepEqual(parsed.ranges, [{start:0x100,end:0x1fff},{start:0x5000,end:0x5d8f}]);
+const m=new IQ151({video:'VIDEO32', grafik:true});
+m.loadMonitor(new Uint8Array(fs.readFileSync(new URL('../roms/Monitor-std.rom',import.meta.url))));
+for(let i=0;i<75;i++)m.advanceWallTime(20);
+const savedPC=m.cpu.pc;
+assert.equal(installIntelHex(m,parsed),11408);
+assert.equal(m.cpu.pc,savedPC,'loading data must not secretly run or reset CPU');
+for (const [addr,value] of parsed.bytes) assert.equal(m.memRead(addr),value,`byte ${addr.toString(16)}`);
+assert.equal(m.memRead(0x0100),0xc3);
+assert.equal(m.memRead(0x0101),0);
+assert.equal(m.memRead(0x0102),0x50);
+const faultLine=fixture.split('\n')[0];
+assert.throws(()=>parseIntelHex(faultLine.slice(0,-2)+'00\n'+fixture.split('\n').slice(1).join('\n')),/checksum/);
+assert.throws(()=>parseIntelHex(fixture.replace(/:00010001FE/, ':00010001FF')),/checksum/);
+assert.throws(()=>parseIntelHex(fixture.replace(/:00010001FE/, '')),/no EOF/);
+const record=(addr,type,data)=>{const bytes=[data.length,addr>>8,addr&255,type,...data], check=(-bytes.reduce((s,b)=>s+b,0))&255;return ':'+[...bytes,check].map(b=>b.toString(16).toUpperCase().padStart(2,'0')).join('')};
+const romFile = [record(0xf000,0,[0x55]),record(0,1,[])].join('\n');
+const romParsed=parseIntelHex(romFile);
+const previous=m.memRead(0x0100);
+assert.throws(()=>installIntelHex(m,romParsed),/non-writable RAM/);
+assert.equal(m.memRead(0x0100),previous,'failed loads must not change existing RAM');
+const mixedFile=[record(0x0100,0,[0x66]),record(0xf000,0,[0x77]),record(0,1,[])].join('\n');
+assert.throws(()=>installIntelHex(m,parseIntelHex(mixedFile)),/non-writable RAM/);
+assert.equal(m.memRead(0x0100),previous,'transactional validate before any write');
+// Unsorted Intel HEX records still start at the lowest loaded RAM address.
+const unsorted=[record(0x5000,0,[0x00]),record(0x0100,0,[0xc3,0x00,0x50]),record(0,1,[])].join('\n');
+const unsortedParsed=parseIntelHex(unsorted);
+assert.equal(unsortedParsed.entry,0x0100);
+assert.equal(unsortedParsed.explicitEntry,false);
+const extended=[record(0,4,[0,0]),record(0x1234,0,[0x88]),record(0,5,[0,0,0x12,0x34]),record(0,1,[])].join('\n');
+const ep=parseIntelHex(extended);
+assert.equal(ep.entry,0x1234);assert.equal(ep.explicitEntry,true);assert.equal(ep.bytes[0][1],0x88);
+const mapAsReadOnly=new IQ151({video:'VIDEO32'});mapAsReadOnly.loadBasic6(new Uint8Array(8192));
+const basicCollision=parseIntelHex([record(0xc800,0,[0x55]),record(0,1,[])].join('\n'));
+assert.throws(()=>installIntelHex(mapAsReadOnly,basicCollision),/non-writable RAM/);
+
+// End-to-end smoke test: real Intel 8080 executes the first JMP and then the
+// game's own loader at 5000h. No ROM shortcuts or hand-coded 'Invaders' code.
+m.cpu.pc=parsed.entry;
+assert.equal(m.cpu.step(),10);
+assert.equal(m.cpu.pc,0x5000);
+const cp0=m.cpu.cycles;
+for(let i=0;i<100;i++)m.advanceWallTime(20);
+assert.ok(m.cpu.cycles>cp0);
+assert.ok(m.grafik.vram.some(x=>x), 'Invaders must write to the real GRAFIK hardware');
+assert.equal(m.grafik.visible,true, 'Invaders enable the GRAFIK video signal');
+console.log('PASS: Intel HEX parse/checksums/ranges/EOF/entry/atomic import');
+console.log('PASS: Invaders at 0100h -> JMP 5000h, native Intel 8080 execution');
+console.log('GAME PC',m.cpu.pc.toString(16),'cycles',m.cpu.cycles,'GRAFIK nonzero',m.grafik.vram.filter(Boolean).length);

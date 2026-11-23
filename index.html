@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IQ 151 — emulátor</title>
+<style>
+  /* Vzhled sjednocený s webulátory PMD 85 a Ondra SPO 186. */
+  :root {
+    --phos:   #c8e0c8;   /* fosforová zeleň textu            */
+    --bezel:  #20241f;   /* rámeček CRT                       */
+    --panel:  #262b23;   /* skříň ovládacího sloupce          */
+    --bay:    #242a22;   /* lůžko malých ovladačů             */
+    --bay-hi: #333c30;   /* lůžko při najetí                  */
+    --slot:   #0e100c;   /* médijní šachta — skoro černá      */
+    --act:    #191d16;   /* akční tlačítko v šachtě           */
+    --act-hi: #232a1f;   /* akční tlačítko při najetí         */
+    --edge:   #000;      /* ryté hrany                        */
+    --accent: #8fb08f;   /* zelený akcent                     */
+    --brass:  #c9a24b;   /* mosazný akcent (aktivní / hover)  */
+    --danger: #d98b5f;   /* teplý akcent pro RESET / eject    */
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px;
+    background: radial-gradient(circle at 50% 25%, #1a1e18, #0c0e0b 72%);
+    background-color: #0c0e0b;
+    color: var(--phos); font-family: "Courier New", monospace; padding: 24px;
+  }
+  h1#title {
+    font-size: 14px; letter-spacing: 3px; font-weight: normal; opacity: .7;
+    margin: 0 0 2px; text-transform: uppercase; text-align: center;
+  }
+
+  /* ---- mřížka: vlevo obrazovka, vpravo sloupec, dole oddělovač ---- */
+  .app {
+    display: grid; gap: 14px 18px;
+    grid-template-columns: min-content min-content;
+    grid-template-rows: min-content min-content 1fr min-content;
+    align-items: start;
+  }
+  .stage { grid-column: 1; grid-row: 1; }
+  .rail  { grid-column: 2; grid-row: 1 / span 3; }
+  .under { grid-column: 1; grid-row: 2; }
+  #keydebug { grid-row: 3; }
+  .foot  { grid-column: 1 / span 2; grid-row: 4; }
+
+  /* ---- CRT ---- */
+  .crt {
+    background: #000; border: 14px solid var(--bezel); border-radius: 18px;
+    box-shadow: 0 0 0 2px #000, 0 18px 50px rgba(0,0,0,.7), inset 0 0 60px rgba(0,0,0,.9);
+    padding: 10px; position: relative;
+  }
+  /* Obrazovka: velikost .tube nastavuje fitCrt() ve web.js tak, aby jeden
+     obrazový řádek IQ byl vždy celý počet FYZICKÝCH pixelů. 512×512 je jen
+     výchozí stav před spuštěním skriptu. */
+  .tube { position: relative; width: 512px; height: 512px; margin: 0 auto; }
+  #screen, #scanlines {
+    position: absolute; inset: 0; display: block;
+    width: 100%; height: 100%; image-rendering: pixelated;
+  }
+  #screen { background: #000; outline: none; }
+  /* Scanlines — samostatné plátno s bitmapou přesně v device pixelech,
+     proto nevzniká zázněj při škálování systému ani při zoomu prohlížeče. */
+  #scanlines { z-index: 1; pointer-events: none; }
+  .crt.no-scanlines #scanlines { display: none; }
+
+  /* CRT v celoobrazovkovém režimu — zvětši plátno, zachovej pixely a poměr */
+  .stage:fullscreen {
+    background: #000; display: flex; align-items: center; justify-content: center;
+    width: 100vw; height: 100vh;
+  }
+  .stage:fullscreen .crt { border-width: 0; border-radius: 0; box-shadow: none; padding: 0; background:#000; }
+
+  /* přetažení souboru na obrazovku */
+  .stage.drag .crt { outline: 2px dashed var(--brass); outline-offset: 6px; }
+
+  /* ---- pod obrazovkou: celá obrazovka + stav ---- */
+  .under { display: flex; align-items: center; gap: 12px; }
+  .status { font-size: 12px; opacity: .8; display: flex; align-items: center; gap: 8px; min-height: 16px; white-space: nowrap; }
+  .led {
+    display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+    background: #3a4136; flex: none;
+  }
+  .led.on { background: #7dff7d; box-shadow: 0 0 8px #7dff7d; }
+  #keydebug { grid-column: 1; font-size: 11px; color: var(--accent); white-space: pre-wrap; margin: 0; }
+
+  #fullscreen {
+    background: #3a4136; color: var(--phos); border: 1px solid var(--edge); border-radius: 7px;
+    padding: 9px 16px; font-family: inherit; font-size: 12px; letter-spacing: 1px; cursor: pointer;
+  }
+  #fullscreen:hover { background: #47503f; color: var(--brass); }
+
+  /* ---- ovládací sloupec ---- */
+  .rail {
+    display: flex; flex-direction: column; gap: 10px;
+    background: var(--panel); padding: 14px; border-radius: 12px; border: 1px solid var(--edge);
+    width: 320px; box-shadow: inset 0 1px 0 rgba(255,255,255,.03);
+  }
+  .rail .grp { display: flex; flex-direction: column; gap: 8px; }
+  .rail hr { width: 100%; height: 1px; border: 0; background: var(--edge); opacity: .6; margin: 2px 0; }
+  .label { font-size: 10px; letter-spacing: 2px; opacity: .55; text-transform: uppercase; }
+
+  /* segmentové přepínače (video / grafika / modul) */
+  .seg { display: flex; gap: 4px; background: var(--bay); padding: 4px; border-radius: 9px; border: 1px solid var(--edge); }
+  .seg button {
+    flex: 1; background: transparent; color: var(--phos); border: 0; border-radius: 6px;
+    padding: 8px 2px; font-family: inherit; font-size: 11px; letter-spacing: 1px; cursor: pointer; opacity: .6;
+  }
+  .seg button:hover { opacity: 1; }
+  .seg button.on {
+    background: linear-gradient(#3a4436, #2f382c); opacity: 1; color: var(--brass);
+    box-shadow: inset 0 0 0 1px rgba(201,162,75,.35), 0 1px 2px rgba(0,0,0,.5);
+  }
+
+  /* médijní šachta (ROM / modul / program) */
+  .slot {
+    display: flex; align-items: center; gap: 14px;
+    background: var(--slot); border: 1px solid var(--edge); border-radius: 10px; padding: 10px 14px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.03), inset 0 0 24px rgba(0,0,0,.55);
+  }
+  .slot > svg.media { width: 50px; height: auto; flex: none; }
+  .slot .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+  .slot .top { display: flex; align-items: center; gap: 12px; }
+  .slot .kind { font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: #7c877a; flex: none; }
+  .slot .acts { display: flex; gap: 6px; }
+  .slot .name { font-size: 12px; color: #5f6a5d; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .slot .name.set { color: var(--brass); }
+  .slot input[type=file] { display: none; }
+
+  .slot .act {
+    width: 30px; height: 28px; display: grid; place-items: center; padding: 0;
+    background: var(--act); color: var(--phos); border: 1px solid var(--edge); border-radius: 6px; cursor: pointer;
+  }
+  .slot .act:hover { background: var(--act-hi); color: var(--brass); }
+  .slot .act .ic { width: 16px; height: 16px; display: block; pointer-events: none; }
+  .slot .act.eject:hover { color: var(--danger); }
+  .slot .act:disabled { opacity: .3; cursor: not-allowed; }
+  .slot .act:disabled:hover { background: var(--act); color: inherit; }
+
+  /* startovací adresa HEX + hlášení loaderu */
+  .slot .entry { display: flex; align-items: center; gap: 6px; font-size: 11px; letter-spacing: 1px; color: #7c877a; }
+  .slot .entry input {
+    width: 4.6em; background: var(--act); color: var(--brass); border: 1px solid var(--edge); border-radius: 5px;
+    padding: 3px 6px; font-family: inherit; font-size: 12px; text-transform: uppercase;
+  }
+  .slot .entry input:focus { outline: 1px solid rgba(201,162,75,.5); }
+  .hexinfo { font-size: 11px; line-height: 1.45; color: #7c877a; margin: 0; }
+  .hexinfo a { color: var(--accent); }
+  .hexinfo a:hover { color: var(--brass); }
+
+  /* obecná tlačítka */
+  .btns { display: flex; gap: 8px; }
+  .btns button {
+    flex: 1; background: #3a4136; color: var(--phos); border: 1px solid var(--edge); border-radius: 7px;
+    padding: 9px 6px; font-family: inherit; font-size: 12px; letter-spacing: 1px; cursor: pointer;
+  }
+  .btns button:hover { background: #47503f; }
+  #reset:hover { color: var(--danger); box-shadow: inset 0 0 0 1px rgba(217,139,95,.4); }
+
+  /* obraz — scanlines */
+  .palette { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .swatch {
+    display: flex; align-items: center; gap: 10px; cursor: pointer; text-align: left;
+    background: var(--bay); border: 1px solid var(--edge); border-radius: 8px; padding: 7px 10px;
+    color: var(--phos); font-family: inherit;
+  }
+  .swatch:hover { background: var(--bay-hi); }
+  .swatch.on { box-shadow: inset 0 0 0 1px rgba(201,162,75,.5); }
+  .swatch .chips { display: flex; gap: 3px; flex: none; }
+  .swatch .chips i { width: 12px; height: 16px; border-radius: 2px; display: block; box-shadow: inset 0 0 0 1px rgba(0,0,0,.5); }
+  .swatch .chips i.lines { background: repeating-linear-gradient(to bottom, #c8e0c8 0 2px, #000 2px 4px); }
+  .swatch .lbl { font-size: 11px; letter-spacing: 1px; opacity: .8; }
+  .swatch.on .lbl { color: var(--brass); opacity: 1; }
+
+  .note { font-size: 10px; line-height: 1.5; opacity: .5; margin: 0; }
+
+  /* ---- dolní oddělovač ---- */
+  .foot {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    border-top: 1px solid var(--edge); padding-top: 12px; font-size: 11px; letter-spacing: 1px;
+  }
+  .foot a { color: var(--accent); text-decoration: none; opacity: .8; }
+  .foot a:hover { opacity: 1; color: var(--brass); }
+  .foot .home::before { content: "‹ "; }
+  .foot .docs::after  { content: " ›"; }
+
+  @media (max-width: 900px) {
+    body { padding: 8px; }
+    .app { grid-template-columns: minmax(0, 1fr); width: min(100%, 560px); }
+    .stage, .under, .rail, .foot { grid-column: 1; grid-row: auto; }
+    .rail { width: 100%; }
+    .under { flex-wrap: wrap; }
+    .crt { border-width: 8px; border-radius: 12px; padding: 6px; }
+  }
+</style>
+</head>
+<body>
+  <!-- akční ikony (kreslené, nezávislé na fontu) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="ic-load" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 3v10"/>
+      <path d="M8 9l4 4 4-4"/>
+      <path d="M5 15v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2"/>
+    </symbol>
+    <symbol id="ic-eject" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12 4l7.5 10h-15z"/>
+      <rect x="4.5" y="16.5" width="15" height="2.6" rx="1.2"/>
+    </symbol>
+    <symbol id="ic-play" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M8 5l11 7-11 7z"/>
+    </symbol>
+  </svg>
+  <h1 id="title">ZPA IQ 151</h1>
+
+  <div class="app">
+    <!-- OBRAZOVKA -->
+    <div class="stage" id="stage">
+      <div class="crt" id="crt">
+        <div class="tube" id="tube">
+          <canvas id="screen" width="256" height="256" tabindex="0"
+                  aria-label="Obrazovka IQ 151; klávesnice směřuje sem"></canvas>
+          <canvas id="scanlines" width="1" height="512" aria-hidden="true"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- POD OBRAZOVKOU: celá obrazovka + stav -->
+    <div class="under">
+      <button id="fullscreen" type="button" title="Přepnout na celou obrazovku (nebo dvojklik na obraz)">⛶ Celá obrazovka</button>
+      <span class="status"><span class="led" id="led"></span><span id="status">start…</span></span>
+    </div>
+
+    <!-- OVLÁDACÍ SLOUPEC -->
+    <div class="rail">
+      <div class="grp">
+        <span class="label">Video modul</span>
+        <div class="seg" id="video">
+          <button type="button" data-value="VIDEO32" class="on">VIDEO 32</button>
+          <button type="button" data-value="VIDEO64">VIDEO 64</button>
+        </div>
+      </div>
+
+      <div class="grp">
+        <span class="label">Grafický modul</span>
+        <div class="seg" id="grafik">
+          <button type="button" data-value="none" class="on">BEZ</button>
+          <button type="button" data-value="grafik">GRAFIK 16 kB</button>
+        </div>
+      </div>
+
+      <div class="grp">
+        <span class="label">ROM modul</span>
+        <div class="seg" id="module">
+          <button type="button" data-value="basic6" class="on">BASIC 6</button>
+          <button type="button" data-value="basicg">BASIC G</button>
+          <button type="button" data-value="none">MONITOR</button>
+        </div>
+      </div>
+
+      <hr>
+
+      <!-- ROM = monitor v EPROM -->
+      <div class="slot" id="rom-slot" title="ROM monitoru (EPROM)">
+        <svg class="media" viewBox="0 0 90 72" aria-hidden="true">
+          <g fill="#8a8f86">
+            <rect x="14" y="8"  width="6" height="6"/><rect x="14" y="20" width="6" height="6"/>
+            <rect x="14" y="32" width="6" height="6"/><rect x="14" y="44" width="6" height="6"/>
+            <rect x="14" y="56" width="6" height="6"/>
+            <rect x="70" y="8"  width="6" height="6"/><rect x="70" y="20" width="6" height="6"/>
+            <rect x="70" y="32" width="6" height="6"/><rect x="70" y="44" width="6" height="6"/>
+            <rect x="70" y="56" width="6" height="6"/>
+          </g>
+          <rect x="20" y="4" width="50" height="64" rx="3" fill="#151713" stroke="#000"/>
+          <path d="M39 4 a6 6 0 0 0 12 0" fill="#000"/>
+          <rect x="30" y="22" width="30" height="20" rx="3" fill="#b9c6c9" stroke="#7d8a8c"/>
+          <circle cx="45" cy="32" r="6" fill="#9fb0b3"/>
+          <text x="45" y="58" text-anchor="middle" font-family="monospace" font-size="9" fill="#c9a24b">MON</text>
+        </svg>
+        <div class="body">
+          <div class="top">
+            <span class="kind">ROM</span>
+            <span class="acts">
+              <button class="act load" id="rom-load" type="button" title="Vyměnit monitor"><svg class="ic"><use href="#ic-load"/></svg></button>
+            </span>
+          </div>
+          <span class="name set" id="rom-name">Monitor-std.rom</span>
+        </div>
+        <input type="file" id="romfile" accept=".rom,.bin">
+      </div>
+
+      <!-- MODUL = zasunutý ROM modul (volba výše) -->
+      <div class="slot" id="mod-slot" title="ROM modul (cartridge)">
+        <svg class="media" viewBox="0 0 90 72" aria-hidden="true">
+          <rect x="24" y="6" width="42" height="60" rx="4" fill="#2b2f28" stroke="#000"/>
+          <g stroke="#151713" stroke-width="2">
+            <line x1="30" y1="12" x2="60" y2="12"/><line x1="30" y1="16" x2="60" y2="16"/>
+            <line x1="30" y1="20" x2="60" y2="20"/>
+          </g>
+          <rect x="29" y="28" width="32" height="22" rx="2" fill="#c9a24b"/>
+          <rect x="32" y="31" width="26" height="4" fill="#2b2f28" opacity=".6"/>
+          <rect x="32" y="38" width="20" height="3" fill="#2b2f28" opacity=".45"/>
+          <rect x="30" y="60" width="30" height="6" fill="#8a8f86"/>
+          <g fill="#2b2f28"><rect x="34" y="60" width="2" height="6"/><rect x="42" y="60" width="2" height="6"/>
+            <rect x="50" y="60" width="2" height="6"/><rect x="58" y="60" width="2" height="6"/></g>
+        </svg>
+        <div class="body">
+          <div class="top">
+            <span class="kind">MODUL</span>
+            <span class="acts">
+              <button class="act eject" id="mod-eject" type="button" title="Vyjmout modul (zůstane MONITOR)"><svg class="ic"><use href="#ic-eject"/></svg></button>
+            </span>
+          </div>
+          <span class="name set" id="mod-name">Basic6.rom</span>
+        </div>
+      </div>
+
+      <!-- PROGRAM = Intel HEX zavedený přímo do RAM -->
+      <div class="slot" id="hex-slot" title="Program Intel HEX — zapíše se do RAM a spustí">
+        <svg class="media" viewBox="0 0 90 72" aria-hidden="true">
+          <path d="M24 6h32l12 12v48H24z" fill="#2b2f28" stroke="#000"/>
+          <path d="M56 6v12h12" fill="#151713" stroke="#000"/>
+          <g stroke="#8a8f86" stroke-width="2">
+            <line x1="31" y1="24" x2="52" y2="24"/><line x1="31" y1="30" x2="61" y2="30"/>
+            <line x1="31" y1="36" x2="57" y2="36"/><line x1="31" y1="42" x2="61" y2="42"/>
+          </g>
+          <rect x="31" y="50" width="30" height="10" rx="2" fill="#c9a24b" opacity=".85"/>
+          <text x="46" y="58" text-anchor="middle" font-family="monospace" font-size="8" font-weight="bold" fill="#2b2f28">HEX</text>
+        </svg>
+        <div class="body">
+          <div class="top">
+            <span class="kind">PROGRAM</span>
+            <span class="acts">
+              <button class="act load" id="hex-load" type="button" title="Vybrat soubor HEX"><svg class="ic"><use href="#ic-load"/></svg></button>
+              <button class="act play" id="hex-run" type="button" title="Zapsat do RAM a spustit" disabled><svg class="ic"><use href="#ic-play"/></svg></button>
+            </span>
+          </div>
+          <span class="name" id="hex-name">— žádný —</span>
+          <label class="entry" for="hex-entry">START
+            <input type="text" id="hex-entry" value="0100" maxlength="4" size="4" spellcheck="false"
+                   aria-label="Spouštěcí adresa HEX (hexadecimálně)">h
+          </label>
+        </div>
+        <input type="file" id="hex-file" accept=".hex,.ihx,text/plain">
+      </div>
+      <p class="hexinfo" id="hex-status" role="status" aria-live="polite">Pro Invaders zvol VIDEO 32 + GRAFIK, poté vyber invaders.hex. Data se zapíší až při spuštění. <a href="./programs/invaders.hex" download>Stáhnout ukázku Invaders</a>.</p>
+
+      <hr>
+
+      <div class="grp">
+        <div class="btns">
+          <button id="reset" type="button">⟲ RESET</button>
+          <button id="pause" type="button">⏸ PAUZA</button>
+          <button id="brk" type="button" title="BR – přerušení běžícího programu (IR5)">⏹ BR</button>
+        </div>
+      </div>
+
+      <div class="grp">
+        <span class="label">Obraz</span>
+        <div class="palette" id="display">
+          <button type="button" class="swatch on" id="btn-scanlines" aria-pressed="true">
+            <span class="chips"><i class="lines"></i></span><span class="lbl">Scanlines</span>
+          </button>
+        </div>
+      </div>
+
+      <p class="note">BR (přerušení běžícího programu) je tlačítko vedle PAUZA.</p>
+      <p class="note">Přepnutí video či grafického modulu simuluje výměnu při vypnutém napájení a resetuje počítač. Dvojitá šířka znaků VIDEO 64 zatím není implementována.</p>
+    </div>
+
+    <!-- DOLNÍ ODDĚLOVAČ -->
+    <div class="foot">
+      <a class="home" href="https://p3t3.org">P3T3.org</a>
+      <!-- ↓ doplň cílovou URL dokumentace -->
+      <a class="docs" href="#" id="docslink">Dokumentace</a>
+    </div>
+  </div>
+
+  <!-- Verze skriptů proti zastaralé mezipaměti prohlížeče. Při změně JS zvyš
+       ?v= všude v tomto bloku (import map platí i pro importy mezi moduly). -->
+  <script type="importmap">
+  {
+    "imports": {
+      "./src/iq151.js":           "./src/iq151.js?v=7",
+      "./src/intel8080.js":       "./src/intel8080.js?v=7",
+      "./src/i8259.js":           "./src/i8259.js?v=7",
+      "./src/intel_hex.js":       "./src/intel_hex.js?v=7",
+      "./src/iq151_video.js":     "./src/iq151_video.js?v=7",
+      "./src/iq151_keyboard.js":  "./src/iq151_keyboard.js?v=7",
+      "./src/iq151_char_map.js":  "./src/iq151_char_map.js?v=7",
+      "./src/iq151_module.js":    "./src/iq151_module.js?v=7",
+      "./src/iq151_grafik.js":    "./src/iq151_grafik.js?v=7"
+    }
+  }
+  </script>
+  <script type="module" src="./web.js?v=7"></script>
+</body>
+</html>

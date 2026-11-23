@@ -1,0 +1,15 @@
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+import {IQ151} from '../src/iq151.js';
+const iq=new IQ151();
+iq.loadMonitor(new Uint8Array(fs.readFileSync(new URL('../roms/Monitor-std.rom',import.meta.url))));
+assert.equal(iq.memRead(0),0xc3,'Boot ROM reset jump at 0000');
+iq.runInstructions(300000);
+assert.equal(iq.resetOverlay,false,'Boot ROM must be unmapped by port 80');
+assert.equal(iq.ram[3],0x69,'Monitor should initialize I/O byte');
+assert.equal(iq.ram[0x1f],0x20,'Monitor detects VIDEO32');
+assert.equal(iq.ram[0x20],0,'Video pointer low');
+assert.equal(iq.ram[0x21],0xec,'Video pointer high');
+assert.ok(iq.vram.some(v=>v!==0),'Monitor writes video memory');
+assert.ok(iq.cpu.pc>=0xf000,'Monitor continues running in ROM');
+console.log('PASS: Original IQ151 monitor ROM boot, port80 remapping, RAM init and VIDEO32 output; PC='+iq.cpu.pc.toString(16));

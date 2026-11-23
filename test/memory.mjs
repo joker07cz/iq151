@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import { IQ151 } from '../src/iq151.js';
+const iq = new IQ151();
+iq.memWrite(0x1234, 0x56); assert.equal(iq.memRead(0x1234),0x56);
+iq.memWrite(0xec00,0x41);assert.equal(iq.memRead(0xec00),0x41);
+assert.equal(iq.memRead(0xe800),0xff);
+const monitor=Uint8Array.from({length:4096},(_,i)=>i&255);
+iq.loadMonitor(monitor);assert.equal(iq.memRead(0xf001),1);
+iq.memWrite(0xf001,0x77);assert.equal(iq.memRead(0xf001),1);
+const basic=new Uint8Array(8192).fill(0xa5);iq.loadBasic6(basic);
+assert.equal(iq.memRead(0xc800),0xa5);
+assert.equal(iq.memRead(0xc7ff),0xff);
+const iq64=new IQ151({ramKB:64,video:'VIDEO64'});
+iq64.memWrite(0xe800,0x67);assert.equal(iq64.memRead(0xe800),0x67);
+assert.equal(iq64.ioRead(0xfc),0xfe);
+assert.equal(iq64.memRead(0xe7ff),0);
+console.log('PASS: phase-0 memory map and ROM overlays (not a ROM boot test)');
