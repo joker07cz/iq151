@@ -117,6 +117,7 @@ const modEject = $('mod-eject');
 const videoSelector = segment('video', rebuildMachine);
 const grafikSelector = segment('grafik', rebuildMachine);
 const moduleSelector = segment('module', () => { attachSelectedModule(); resetMachine(); });
+const ramSelector = segment('ram', rebuildMachine);
 
 let iq;
 function attachSelectedModule() {
@@ -130,7 +131,11 @@ function attachSelectedModule() {
   modEject.disabled = !name;
 }
 function createMachine() {
-  iq = new IQ151({ video: videoSelector.value, grafik: grafikSelector.value === 'grafik' });
+  iq = new IQ151({
+    video: videoSelector.value,
+    grafik: grafikSelector.value === 'grafik',
+    ramKB: Number(ramSelector.value),
+  });
   iq.loadMonitor(monitor);
   attachSelectedModule();
   updateCanvas();
@@ -172,7 +177,7 @@ function tick(now = performance.now()) {
     iq.advanceWallTime(elapsed); draw();
     status.textContent = `běží · PC ${h4(iq.cpu.pc)}`;
     if (diag) { frameMs.push(elapsed); if (frameMs.length > 60) frameMs.shift(); const avg = frameMs.reduce((a, b) => a + b, 0) / frameMs.length; diag.textContent = `PC=${h4(iq.cpu.pc)} INTE=${+iq.cpu.inte} IRQ#=${iq.irqCount} PIC irr=${iq.pic.irr.toString(16)} isr=${iq.pic.isr.toString(16)} imr=${iq.pic.imr.toString(16)} init=${+iq.pic.initialized} [0006]=${iq.ram[6].toString(16)} frame≈${avg.toFixed(1)}ms max=${Math.max(...frameMs).toFixed(0)}ms held=${[...iq.keyboard.held.keys()].join(',') || '-'}`; }
-    status.title = `CPU T=${iq.cpu.cycles}  ROM overlay=${iq.resetOverlay ? 'on' : 'off'}  Module=${moduleSelector.value}  Video=${iq.video}  GRAFIK=${iq.grafik ? 'installed' : 'absent'}`;
+    status.title = `CPU T=${iq.cpu.cycles}  ROM overlay=${iq.resetOverlay ? 'on' : 'off'}  RAM=${iq.ram.length/1024}kB  Module=${moduleSelector.value}  Video=${iq.video}  GRAFIK=${iq.grafik ? 'installed' : 'absent'}`;
   }
   requestAnimationFrame(tick);
 }
