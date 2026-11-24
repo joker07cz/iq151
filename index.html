@@ -37,14 +37,15 @@
   .app {
     display: grid; gap: 14px 18px;
     grid-template-columns: min-content min-content;
-    grid-template-rows: min-content min-content 1fr min-content;
+    grid-template-rows: min-content min-content min-content 1fr min-content;
     align-items: start;
   }
   .stage { grid-column: 1; grid-row: 1; }
-  .rail  { grid-column: 2; grid-row: 1 / span 3; }
+  .rail  { grid-column: 2; grid-row: 1 / span 4; }
   .under { grid-column: 1; grid-row: 2; }
-  #keydebug { grid-row: 3; }
-  .foot  { grid-column: 1 / span 2; grid-row: 4; }
+  .sdpanel { grid-column: 1; grid-row: 3; }
+  #keydebug { grid-row: 4; }
+  .foot  { grid-column: 1 / span 2; grid-row: 5; }
 
   /* ---- CRT ---- */
   .crt {
@@ -191,6 +192,28 @@
   .hexinfo a { color: var(--accent); }
   .hexinfo a:hover { color: var(--brass); }
 
+  /* SD-ROM: virtuální disk */
+  .sdpanel { display: flex; flex-direction: column; gap: 8px; width: 560px; box-sizing: border-box;
+    background: var(--panel); padding: 12px 14px; border-radius: 12px; border: 1px solid var(--edge); }
+  .sdpanel[hidden] { display: none; }
+  .sd-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .sd-bar button, .sd-file button {
+    background: var(--act); color: inherit; border: 1px solid var(--edge); border-radius: 6px;
+    padding: 5px 8px; font: inherit; font-size: 11px; cursor: pointer;
+  }
+  .sd-bar button:hover, .sd-file button:hover { background: var(--act-hi); color: var(--brass); }
+  .sd-led { width: 9px; height: 9px; border-radius: 50%; background: #3a4436; margin-left: auto; }
+  .sd-led.on { background: #6fdc6f; box-shadow: 0 0 6px #6fdc6f; }
+  .sd-list { list-style: none; margin: 0; padding: 4px; max-height: 190px; overflow: auto; columns: 2; column-gap: 8px;
+    background: var(--bay); border: 1px solid var(--edge); border-radius: 9px; font-size: 11px; }
+  .sd-list.drag { outline: 2px dashed var(--brass); }
+  .sd-file { display: flex; align-items: center; gap: 6px; padding: 2px 4px; break-inside: avoid; }
+  .sd-file .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sd-file .sz { opacity: .55; }
+  .sd-file button { display: grid; place-items: center; width: 28px; height: 26px; padding: 0; }
+  .sd-file button .ic { width: 16px; height: 16px; display: block; pointer-events: none; }
+  .sd-empty { opacity: .55; padding: 4px; }
+
   /* obecná tlačítka */
   .btns { display: flex; gap: 8px; }
   .btns button {
@@ -231,7 +254,9 @@
   @media (max-width: 900px) {
     body { padding: 8px; }
     .app { grid-template-columns: minmax(0, 1fr); width: min(100%, 560px); }
-    .stage, .under, .rail, .foot { grid-column: 1; grid-row: auto; }
+    .stage, .under, .sdpanel, .rail, .foot { grid-column: 1; grid-row: auto; }
+    .sdpanel { width: 100%; }
+    .sd-list { columns: 1; }
     .rail { width: 100%; }
     .under { flex-wrap: wrap; }
     .crt { border-width: 8px; border-radius: 12px; padding: 6px; }
@@ -254,6 +279,11 @@
       <path d="M12 15V5"/>
       <path d="M8 9l4-4 4 4"/>
       <path d="M5 15v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2"/>
+    </symbol>
+    <symbol id="ic-floppy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M5 3h11l3 3v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/>
+      <path d="M7 3v5h8V3"/>
+      <path d="M7 21v-7h10v7"/>
     </symbol>
     <symbol id="ic-play" viewBox="0 0 24 24" fill="currentColor">
       <path d="M8 5l11 7-11 7z"/>
@@ -280,6 +310,23 @@
       <span class="status"><span class="led" id="led"></span><span id="status">start…</span></span>
     </div>
 
+    <!-- SD-ROM: virtuální disk (pod obrazovkou, je tu místo na šířku) -->
+    <section class="sdpanel" id="sd-box" hidden aria-label="Virtuální disk SD-ROM">
+      <div class="sd-bar">
+        <span class="label">SD-ROM disk</span>
+        <button type="button" id="sd-add">Přidat soubory</button>
+        <button type="button" id="sd-dir">Přidat složku</button>
+        <button type="button" id="sd-clear">Vyprázdnit</button>
+        <span class="sd-led" id="sd-led" title="Aktivita SD-ROM"></span>
+      </div>
+      <ul class="sd-list" id="sd-list" aria-label="Soubory na virtuálním disku SD-ROM"></ul>
+      <p class="hexinfo">Disk je jen v paměti stránky (po zavření zmizí, uložené programy si stáhni). Soubory nebo složku přetáhni do seznamu.
+        SD-ROM se počítači hlásí jako snímač a děrovač děrné pásky. Správce z něj načteš tak, že přepneš vstup na děrnou pásku:
+        v BASICu příkazem <code>PTAPE</code>, v monitoru <code>S3[→]55[Enter]</code> a příkaz <code>L</code>.</p>
+      <input type="file" id="sd-files" multiple hidden>
+      <input type="file" id="sd-folder" webkitdirectory hidden>
+    </section>
+
     <!-- OVLÁDACÍ SLOUPEC -->
     <div class="rail">
       <!-- STROJ: zobrazovací moduly / ROM modul / velikost RAM (změna = vypnutí a zapnutí) -->
@@ -302,6 +349,14 @@
         <div class="seg" id="ram">
           <button type="button" data-value="32" class="on" title="Paměť RAM 32 kB">32 kB RAM</button>
           <button type="button" data-value="64" title="Paměť RAM 64 kB">64 kB RAM</button>
+        </div>
+      </div>
+
+      <div class="grp">
+        <span class="label">SD-ROM</span>
+        <div class="seg" id="sdrom">
+          <button type="button" data-value="none" class="on">BEZ</button>
+          <button type="button" data-value="sdrom">SD-ROM</button>
         </div>
       </div>
 

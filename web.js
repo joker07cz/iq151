@@ -8,6 +8,7 @@ import { parseProgram } from './src/iq151_program.js';
 import { tapeToWav, wavToTape, cswToTape } from './src/iq151_tape.js';
 import { displayGeometry, rasterizeComposite } from './src/iq151_video.js';
 import { IqSound } from './src/iq151_sound.js';
+import { SdDisk } from './src/sd_disk.js';
 
 const $ = id => document.getElementById(id);
 const canvas = $('screen');
@@ -143,6 +144,7 @@ const grafikSelector = (() => {
 })();
 const moduleSelector = segment('module', () => { attachSelectedModule(); resetMachine(); });
 const ramSelector = segment('ram', rebuildMachine);
+const sdSelector = segment('sdrom', () => { attachSdRom(); resetMachine(); });
 
 let iq;
 function attachSelectedModule() {
@@ -161,8 +163,92 @@ function createMachine() {
   if (old) iq.adoptTape(old);     // kazeta zůstává v magnetofonu i po výměně modulů
   iq.loadMonitor(monitor);
   attachSelectedModule();
+  attachSdRom();
   updateCanvas();
 }
+// --- SD-ROM: virtuální disk v paměti stránky (přežije přestavbu stroje, ne zavření stránky) ---
+const sdDisk = new SdDisk({ loader: await load('./programs/__BLOADER.BAS') });
+const sdBox = $('sd-box'), sdList = $('sd-list'), sdLed = $('sd-led');
+function attachSdRom() {
+  const on = sdSelector.value === 'sdrom';
+  sdBox.hidden = !on;
+  if (on) {
+    iq.attachSdRom(sdDisk).onLed = v => sdLed.classList.toggle('on', v);
+  } else {
+    iq.detachSdRom();
+    sdLed.classList.remove('on');
+  }
+}
+const fmtSize = n => n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} kB`;
+function renderSdList() {
+  sdList.textContent = '';
+  const files = sdDisk.allFiles().filter(f => f.path.toLowerCase() !== '/__bloader.bas');
+  if (!files.length) {
+    const li = document.createElement('li'); li.className = 'sd-empty'; li.textContent = '— disk je prázdný —';
+    sdList.append(li);
+    return;
+  }
+  for (const f of files) {
+    const li = document.createElement('li'); li.className = 'sd-file';
+    const n = document.createElement('span'); n.className = 'n'; n.textContent = f.path; n.title = f.path;
+    const sz = document.createElement('span'); sz.className = 'sz'; sz.textContent = fmtSize(f.size);
+    const dl = document.createElement('button'); dl.type = 'button'; dl.title = 'Uložit do počítače'; dl.setAttribute('aria-label', 'Uložit do počítače');
+    // disketa = uložit do počítače (šipka dolů u šachet ROM / programu znamená opačný směr: nahrát do emulátoru)
+    const ic = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); ic.setAttribute('class', 'ic');
+    const use = document.createElementNS('http://www.w3.org/2000/svg', 'use'); use.setAttribute('href', '#ic-floppy');
+    ic.append(use); dl.append(ic);
+    dl.addEventListener('click', () => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([sdDisk.read(f.path)]));
+      a.download = f.path.split('/').pop();
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    });
+    const rm = document.createElement('button'); rm.type = 'button'; rm.textContent = '✕'; rm.title = 'Smazat';
+    rm.addEventListener('click', () => sdDisk.remove(f.path));
+    li.append(n, sz, dl, rm);
+    sdList.append(li);
+  }
+}
+sdDisk.onchange = renderSdList;
+renderSdList();
+$('sd-add').addEventListener('click', () => $('sd-files').click());
+$('sd-dir').addEventListener('click', () => $('sd-folder').click());
+$('sd-clear').addEventListener('click', () => sdDisk.clear());
+for (const id of ['sd-files', 'sd-folder'])
+  $(id).addEventListener('change', async e => { await sdDisk.addFiles(e.target.files); e.target.value = ''; });
+['dragenter', 'dragover'].forEach(ev => sdList.addEventListener(ev, e => { e.preventDefault(); sdList.classList.add('drag'); }));
+['dragleave', 'drop'].forEach(ev => sdList.addEventListener(ev, e => { e.preventDefault(); sdList.classList.remove('drag'); }));
+// Přetažená složka není v dataTransfer.files čitelná; je nutné projít záznamy (webkitGetAsEntry) rekurzivně.
+// Stejně jako výběr složky: jméno přetažené (nejvyšší) složky se nepoužije, její obsah patří do kořene disku.
+async function entryFiles(entry, prefix = '', top = true) {
+  if (entry.isFile) {
+    const file = await new Promise((ok, fail) => entry.file(ok, fail));
+    file._relPath = prefix + entry.name;
+    return [file];
+  }
+  const reader = entry.createReader();
+  const kids = [];
+  for (;;) {   // readEntries vrací po částech (v Chromu max. 100 položek)
+    const batch = await new Promise((ok, fail) => reader.readEntries(ok, fail));
+    if (!batch.length) break;
+    kids.push(...batch);
+  }
+  const out = [];
+  const kidPrefix = top ? prefix : prefix + entry.name + '/';
+  for (const k of kids) out.push(...await entryFiles(k, kidPrefix, false));
+  return out;
+}
+sdList.addEventListener('drop', async e => {
+  e.stopPropagation();
+  const dt = e.dataTransfer;
+  if (!dt) return;
+  // záznamy je nutné získat synchronně, po prvním await už jsou DataTransfer položky neplatné
+  const entries = [...(dt.items || [])].map(i => i.webkitGetAsEntry?.()).filter(Boolean);
+  const files = entries.length ? (await Promise.all(entries.map(en => entryFiles(en)))).flat() : [...dt.files];
+  if (files.length) await sdDisk.addFiles(files);
+});
+
 function rebuildMachine() { createMachine(); resetMachine(); }
 
 // --- zvuk ---

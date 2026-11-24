@@ -4,6 +4,7 @@ import { I8259 } from './i8259.js';
 import { Basic6Module, BasicGModule } from './iq151_module.js';
 import { IQGrafik } from './iq151_grafik.js';
 import { Tape, KHZ_HALF } from './iq151_tape.js';
+import { SdRom } from './iq151_sdrom.js';
 
 // IQ 151 hardware model: CPU, 8255, 8259, video and optional ROM module.
 export class IQ151 {
@@ -16,6 +17,7 @@ export class IQ151 {
     this.vram = new Uint8Array(video === 'VIDEO64' ? 2048 : 1024);
     this.monitor = null;
     this.module = null;
+    this.sdrom = null;
     this.ioLog = [];
     this.soundLog = [];
     this._lastSoundBit = 0;
@@ -46,6 +48,14 @@ export class IQ151 {
   ejectModule() {
     this.module = null;
   }
+  // Modul SD-ROM (porty F8–FB) nad virtuálním diskem SdDisk.
+  attachSdRom(disk) {
+    this.sdrom = new SdRom(disk, { now: () => this.cpu.cycles });
+    return this.sdrom;
+  }
+  detachSdRom() {
+    this.sdrom = null;
+  }
   reset() {
     this.ram.fill(0); this.vram.fill(0); if(this.grafik) this.grafik.reset();
     this.tape.rebase(this.cpu.cycles, 0);   // čítač taktů se nuluje, páska běží plynule dál
@@ -58,6 +68,7 @@ export class IQ151 {
     this.lastWallMs=null;this.tstateRemainder=0;this.irqCount=0;this.irqTstates=0;
     this.tapePc0=0; this.tapeLatched=0; this.tapeNextB=0;
     this.tape.setMotor(false, 0); this.tape.level = 0;
+    if(this.sdrom) this.sdrom.reset();
   }
   // Magnetofon. Relé motoru = PC1, data ven = PC0 (jen když je dolní půlka C výstup).
   tapeMotorBit(){ return (this.ppi[3]&0x01) ? 0 : (this.ppi[2]>>1)&1; }
@@ -161,6 +172,7 @@ export class IQ151 {
     if(port>=0x84 && port<=0x87) return this.ppiRead(port-0x84);
     if(port===0x88 || port===0x89) return this.pic.read(port-0x88);
     if(port===0xd4 && this.grafik) return this.grafik.read(port);
+    if(port>=0xf8 && port<=0xfb && this.sdrom) return this.sdrom.ioRead(port);
     if (port>=0xfc) return this.video==='VIDEO64' ? 0xfe : 0xff;
     return 0xff;
   }
@@ -181,6 +193,7 @@ export class IQ151 {
     }
     else if(port===0x88 || port===0x89) this.pic.write(port-0x88,value);
     else if(port>=0xd0 && port<=0xd4 && this.grafik) this.grafik.write(port,value);
+    else if(port>=0xf8 && port<=0xfb && this.sdrom) this.sdrom.ioWrite(port,value);
     else if(port>=0xfc && this.video==='VIDEO64') this.video64DoubleWidthEnabled=!!(value&1);
   }
   // Hardware tick source: 20ms of wall time, independent of video frames.
@@ -197,6 +210,7 @@ export class IQ151 {
       let chunk=0;
       while(chunk<next){const cycles=this.cpu.step();chunk+=cycles;}
       executed+=chunk;
+      if(this.sdrom) this.sdrom.pump();
       this.irqTstates+=chunk;
       while(this.irqTstates>=period){this.irqTstates-=period;this.pic.request(6);this.irqCount++;}
     }
