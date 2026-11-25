@@ -5,6 +5,7 @@
 import { IQ151 } from './src/iq151.js';
 import { parseIntelHex, installIntelHex } from './src/intel_hex.js';
 import { displayGeometry, rasterizeComposite } from './src/iq151_video.js';
+import { IqSound } from './src/iq151_sound.js';
 
 const $ = id => document.getElementById(id);
 const canvas = $('screen');
@@ -94,6 +95,14 @@ let monitor = await load('./roms/Monitor-std.rom');
 const basic6 = await load('./modules/Basic6.rom');
 const basicG = await load('./modules/BasicG.rom');
 const basicG2 = await load('./modules/BasicG2.rom');
+const sound = new IqSound();
+
+// Web Audio smí začít až po gestu uživatele a po skrytí / návratu karty se musí probudit.
+function wakeAudio() { sound.ensureStarted(); }
+window.addEventListener('pointerdown', wakeAudio);
+window.addEventListener('keydown', wakeAudio);
+window.addEventListener('focus', () => sound.wake());
+document.addEventListener('visibilitychange', () => sound.wake());
 
 // --- segmentové přepínače ---
 function segment(id, onChange) {
@@ -143,6 +152,17 @@ function createMachine() {
 function rebuildMachine() { createMachine(); resetMachine(); }
 modEject.addEventListener('click', () => moduleSelector.set('none'));
 
+// --- zvuk ---
+const sndBtn = document.getElementById('sound');
+if (sndBtn) {
+  sndBtn.addEventListener('click', () => {
+    wakeAudio();
+    const on = !sound.enabled;
+    sound.setEnabled(on);
+    sndBtn.classList.toggle('on', on);
+  });
+}
+
 // Barva stínítka — IQ 151 se připojovalo k černobílé televizi nebo monitoru; výchozí je bílá.
 const DISPLAY_COLORS = {
   white: { label: 'Bílá',          on: [255, 255, 255], off: [0, 0, 0], css: '#ffffff' },
@@ -174,7 +194,9 @@ function draw() {
 function tick(now = performance.now()) {
   const elapsed = Math.max(0, Math.min(100, now - lastTime)); lastTime = now;
   if (!paused) {
-    iq.advanceWallTime(elapsed); draw();
+    iq.advanceWallTime(elapsed);
+    sound.feed(iq.drainSound(), iq.cpu.cycles, iq.clockHz);
+    draw();
     status.textContent = `běží · PC ${h4(iq.cpu.pc)}`;
     if (diag) { frameMs.push(elapsed); if (frameMs.length > 60) frameMs.shift(); const avg = frameMs.reduce((a, b) => a + b, 0) / frameMs.length; diag.textContent = `PC=${h4(iq.cpu.pc)} INTE=${+iq.cpu.inte} IRQ#=${iq.irqCount} PIC irr=${iq.pic.irr.toString(16)} isr=${iq.pic.isr.toString(16)} imr=${iq.pic.imr.toString(16)} init=${+iq.pic.initialized} [0006]=${iq.ram[6].toString(16)} frame≈${avg.toFixed(1)}ms max=${Math.max(...frameMs).toFixed(0)}ms held=${[...iq.keyboard.held.keys()].join(',') || '-'}`; }
     status.title = `CPU T=${iq.cpu.cycles}  ROM overlay=${iq.resetOverlay ? 'on' : 'off'}  RAM=${iq.ram.length/1024}kB  Module=${moduleSelector.value}  Video=${iq.video}  GRAFIK=${iq.grafik ? 'installed' : 'absent'}`;
