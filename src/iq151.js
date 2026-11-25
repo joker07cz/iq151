@@ -43,6 +43,7 @@ export class IQ151 {
   }
   reset() {
     this.ram.fill(0); this.vram.fill(0); if(this.grafik) this.grafik.reset(); this.cpu.reset();
+    this.ram[0xc800] = 0xff; // Obchází chybu monitoru při konfiguraci 64 kB RAM bez BASICu (na C800 hledá modul).
     this.ioLog=[];
     this.resetOverlay=true; this.port80=0; this.video64DoubleWidthEnabled=false; this.ppi=[0xff,0xff,0xff,0x9b]; this.pic.reset(); this.keyboard=new IQKeyboard();
     this.lastWallMs=null;this.tstateRemainder=0;this.irqCount=0;this.irqTstates=0;
