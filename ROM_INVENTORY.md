@@ -23,3 +23,6 @@ Extracted unmodified from user-supplied `emulator.jar`. SHA-256 allows integrity
 | roms | Monitor-std.rom | 4096 | `66647f2dc53234926c81e5350de042ab68674325c421007f808311dd92cf0862` |
 | roms | chars.bin | 1024 | `70cac827e4b75565e6b751e647602a59755986f8e7965f081ada54c2cf8ec720` |
 | roms | monitor-cpm 221088.rom | 4096 | `fca70e8865393183b55fb95015b3bc4701f007a8e9b8a015070ce2a7cf6bf7ce` |
+| roms | Monitor-v84.rom | 4096 | `5891279069b08e93c52507bf04bbe9abe3674c608ceb4515998f7886db20d6a9` |
+
+`Monitor-v84.rom` comes from the iq151.net EPROM archive (Monitor-v84.zip), not from emulator.jar. `Monitor-std.rom` is identical to iq151.net Monitor v.86 (the recommended version; v.86 fixes interrupt handling that caused random resets in v.84). The four `Monitor-cpm-*` ROMs match iq151.net CP/M FELNET 87/09, 88/01, 88/10 and Variel.

@@ -4,7 +4,7 @@ const hex16 = n => n.toString(16).toUpperCase().padStart(4, '0');
 export function parseIntelHex(source) {
   if (typeof source !== 'string') throw new TypeError('Intel HEX input must be text');
   if (source.length > 4_000_000) throw new Error('HEX file is too large');
-  let base = 0, eof = false, startAddress = null, count = 0;
+  let base = 0, eof = false, startAddress = null, eofAddress = 0, count = 0;
   const bytes = new Map();
   const lines = source.replace(/^\uFEFF/, '').split(/\r\n|\n|\r/);
   const error = (line, message) => { throw new Error(`HEX line ${line}: ${message}`); };
@@ -38,8 +38,9 @@ export function parseIntelHex(source) {
       }
       case 0x01:
         if (size !== 0) error(n, 'EOF record must be empty');
-        // Per Intel HEX, the EOF address field is ignored (some old tools emit 0100).
-        eof = true; break;
+        // Monitor IQ 151 (příkaz L) bere adresu v EOF záznamu jako start:
+        // nenulová = po nahrání skočí na ni, 0000 = vrátí se do monitoru.
+        eofAddress = offset; eof = true; break;
       case 0x02:
         if (size !== 2 || offset !== 0) error(n, 'invalid segment address record');
         base = (((payload[0] << 8) | payload[1]) << 4); break;
@@ -71,9 +72,10 @@ export function parseIntelHex(source) {
   }
   return {
     bytes: ordered, ranges, records: count, size: ordered.length,
-    // Default: beginning of the lowest loaded data range. Do not infer a jump target.
-    entry: startAddress ?? ordered[0][0],
-    explicitEntry: startAddress !== null,
+    // Start: záznam 03/05, jinak nenulová adresa EOF (konvence monitoru IQ 151),
+    // jinak začátek nejnižší oblasti dat. Skok se z kódu neodhaduje.
+    entry: startAddress ?? (eofAddress || ordered[0][0]),
+    explicitEntry: startAddress !== null || eofAddress !== 0,
   };
 }
 

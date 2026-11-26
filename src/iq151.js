@@ -3,6 +3,7 @@ import { Intel8080 } from './intel8080.js';
 import { I8259 } from './i8259.js';
 import { Basic6Module, BasicGModule } from './iq151_module.js';
 import { IQGrafik } from './iq151_grafik.js';
+import { Tape, KHZ_HALF } from './iq151_tape.js';
 
 // IQ 151 hardware model: CPU, 8255, 8259, video and optional ROM module.
 export class IQ151 {
@@ -29,6 +30,7 @@ export class IQ151 {
     this.cpu.interruptController=this.pic;
     // 18,432 MHz / 9 = 2,048 MHz (skutečný IQ 151; 50 Hz přerušení = 40 960 taktů). Zvuk bere kmitočet odsud.
     this.clockHz=2048000; this.irqPeriodMs=20; this.irqCount=0; this.lastWallMs=null; this.tstateRemainder=0;
+    this.tape = new Tape(this.clockHz);   // magnetofon: přežije RESET i přestavbu stroje (web ho přenáší)
     this.reset();
   }
   loadMonitor(image) {
@@ -45,14 +47,50 @@ export class IQ151 {
     this.module = null;
   }
   reset() {
-    this.ram.fill(0); this.vram.fill(0); if(this.grafik) this.grafik.reset(); this.cpu.reset();
+    this.ram.fill(0); this.vram.fill(0); if(this.grafik) this.grafik.reset();
+    this.tape.rebase(this.cpu.cycles, 0);   // čítač taktů se nuluje, páska běží plynule dál
+    this.cpu.reset();
     this.ram[0xc800] = 0xff; // Obchází chybu monitoru při konfiguraci 64 kB RAM bez BASICu (na C800 hledá modul).
     this.ioLog=[];
     this.soundLog=[];
     this._lastSoundBit=0;
     this.resetOverlay=true; this.port80=0; this.video64DoubleWidthEnabled=false; this.ppi=[0xff,0xff,0xff,0x9b]; this.pic.reset(); this.keyboard=new IQKeyboard();
     this.lastWallMs=null;this.tstateRemainder=0;this.irqCount=0;this.irqTstates=0;
+    this.tapePc0=0; this.tapeLatched=0; this.tapeNextB=0;
+    this.tape.setMotor(false, 0); this.tape.level = 0;
   }
+  // Magnetofon. Relé motoru = PC1, data ven = PC0 (jen když je dolní půlka C výstup).
+  tapeMotorBit(){ return (this.ppi[3]&0x01) ? 0 : (this.ppi[2]>>1)&1; }
+  tapePc0Bit(){ return (this.ppi[3]&0x01) ? 0 : this.ppi[2]&1; }
+  khz1(t=this.cpu.cycles){ return Math.floor(t/KHZ_HALF)&1; }
+  // Výstup na pásku: PC0 se přepíše do klopného obvodu při vzestupné hraně
+  // hodin 1 kHz a do magnetofonu jde XOR s hodinami (dvoufázové kódování,
+  // buňka bitu 1 ms: v půlce buňky je vždy hrana). Hrany se generují líně
+  // po hranicích půlperiod až do `now`.
+  tapeOutFlush(now=this.cpu.cycles){
+    const H=KHZ_HALF;
+    if(!(this.tape.mode==='rec' && this.tape.motor)){
+      // nenahrává se: zpoždění klopného obvodu nehraje roli
+      this.tapeLatched=this.tapePc0; this.tapeNextB=Math.floor(now/H)*H+H; return;
+    }
+    while(this.tapeNextB<=now){
+      const b=this.tapeNextB, k=(b/H)&1;
+      if(k) this.tapeLatched=this.tapePc0;          // vzestupná hrana hodin
+      this.tape.output(this.tapeLatched^k, b);
+      this.tapeNextB=b+H;
+    }
+  }
+  tapeAfterPpiWrite(){
+    const now=this.cpu.cycles, pc0=this.tapePc0Bit(), motor=this.tapeMotorBit();
+    if(pc0!==this.tapePc0){ this.tapeOutFlush(now); this.tapePc0=pc0; }
+    if(!!motor!==this.tape.motor){ this.tapeOutFlush(now); this.tape.setMotor(motor, now); }
+  }
+  tapePlay(){ this.tapeOutFlush(); this.tape.play(this.cpu.cycles); }
+  tapeRecord(){ this.tapeOutFlush(); this.tape.record(this.cpu.cycles, this.tape.level); }
+  tapeStop(){ this.tapeOutFlush(); this.tape.stop(this.cpu.cycles); }
+  tapeRewind(){ this.tapeOutFlush(); this.tape.rewind(this.cpu.cycles); }
+  // Přenesení magnetofonu do nově postaveného stroje (změna RAM / videa).
+  adoptTape(old){ old.tapeOutFlush(); old.tape.setMotor(false, old.cpu.cycles); this.tape=old.tape; this.tape.anchor=this.cpu.cycles; }
   memRead(addr) {
     addr &= 0xffff;
     if (this.resetOverlay && this.monitor && addr < 0x800) return this.monitor[0x800 + addr];
@@ -79,7 +117,11 @@ export class IQ151 {
     if(reg===1) return (control&0x02) ? this.keyboard.readB(this.ppi[0]) : this.ppi[1];
     if(reg===2) {
       let v=this.ppi[2];
-      if(control&0x08) {
+      if((control&0x08) && this.tape.motor) {
+        // Běží motor magnetofonu: PC7 = data z pásky, PC5 = hodiny 1 kHz, PC6 = PC4 = 0.
+        const now=this.cpu.cycles;
+        v=(v&0x0f)|(this.tape.input(now)<<7)|(this.khz1(now)<<5);
+      } else if(control&0x08) {
         // Input lines PC4=SHIFT, PC5=CTRL, PC6=FA, PC7=FB are active low.
         let high=0xf0;
         if(this.keyboard.shift)high&=~0x10;
@@ -128,6 +170,7 @@ export class IQ151 {
     if(port===0x80) { this.port80=value; if(value&1) this.resetOverlay=false; }
     else if(port>=0x84 && port<=0x87) {
       this.ppiWrite(port-0x84,value);
+      this.tapeAfterPpiWrite();
       // reproduktor: PC3 portu C; zaznamenat každé přepnutí s časem v taktech CPU
       const bit = (this.ppi[2] >> 3) & 1;
       if (bit !== this._lastSoundBit) {
@@ -157,6 +200,7 @@ export class IQ151 {
       this.irqTstates+=chunk;
       while(this.irqTstates>=period){this.irqTstates-=period;this.pic.request(6);this.irqCount++;}
     }
+    this.tapeOutFlush();
     return executed;
   }
   drainSound() { const l = this.soundLog; this.soundLog = []; return l; }

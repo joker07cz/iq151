@@ -8,7 +8,7 @@ const parsed = parseIntelHex(fixture);
 assert.equal(parsed.size, 11408);
 assert.equal(parsed.records, 358);
 assert.equal(parsed.entry, 0x100);
-assert.equal(parsed.explicitEntry, false);
+assert.equal(parsed.explicitEntry, true, 'EOF :00010001FE = start 0100 (konvence monitoru IQ 151, příkaz L)');
 assert.deepEqual(parsed.ranges, [{start:0x100,end:0x1fff},{start:0x5000,end:0x5d8f}]);
 const m=new IQ151({video:'VIDEO32', grafik:true});
 m.loadMonitor(new Uint8Array(fs.readFileSync(new URL('../roms/Monitor-std.rom',import.meta.url))));

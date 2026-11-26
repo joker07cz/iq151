@@ -91,6 +91,12 @@ export class IqSound {
     this.nextTime = 0;          // po zapnutí znovu navázat s odstupem
   }
 
+  // přeskočit úsek (turbo magnetofonu): nic nevyrenderovat, navázat od `cycle`
+  skip(cycle) {
+    if (this.renderer) this.renderer.reset(cycle);
+    this.nextTime = 0;
+  }
+
   // volat jednou za snímek po iq.advanceWallTime: log = iq.drainSound(), cycle = iq.cpu.cycles, clockHz = iq.clockHz
   feed(log, cycle, clockHz) {
     const ctx = this.ctx;
