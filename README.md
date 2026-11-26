@@ -1,3 +1,21 @@
+# IQ 151 — magnetofon a programy (HEX / BIN / HEXBIN)
+
+**Magnetofon** (`src/iq151_tape.js`): kazeta WAV nebo CSW (v1, v2 RLE / Z-RLE), uložení jako WAV 44,1 kHz.
+Zapojení podle JIQ151 a rutin monitoru: PC1 = motor, PC0 = data ven (klopný obvod 1 kHz, XOR s hodinami →
+dvoufázový kód, buňka 1 ms), PC7 = data z pásky, PC5 = hodiny 1 kHz (při běžícím motoru). Páska se posouvá
+jen při ▶ / ● a sepnutém motoru. Monitor po startu má IOBYTE 69h, takže **L** čte Intel HEX z pásky a po EOF
+záznamu s nenulovou adresou program spustí, **W od,do,start** zapisuje. Tlačítko ⏩ TURBO pouští emulaci,
+dokud se točí páska, tak rychle, jak prohlížeč stačí (až 100×).
+
+**Programy** (`src/iq151_program.js`): `.hex` (start = záznam 03/05, jinak adresa EOF jako u L), `.bin`
+blokový jako u Ondry (`01 adr délka data… 02 start`), jinak prostý od adresy START, `.hexbin` (turbo zavaděč
+v HEX + blokový BIN, jak je vyrábí Hexbin2WAV).
+
+URL: `?TAP=MESTO_IQ_G` (z `tapes/`, zkusí .csw a .wav), `?BIN=MESTO_IQ_G` (z `bins/`, zkusí .hex, .hexbin, .bin),
+sestava `?GRAFIK=1&MOD=none&VIDEO=64&RAM=64`.
+
+Testy: `node test/tape.mjs` (W → páska → WAV → L), `node test/program.mjs`.
+
 # IQ 151 — Phase 6.2 (experimental)
 
 Intel HEX program loading. See **[PHASE6_2.md](PHASE6_2.md)** for test steps, entry address, Invaders requirements and limitations. Phase 5.1 remains the unchanged stable reference.
